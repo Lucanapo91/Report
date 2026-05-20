@@ -110,7 +110,7 @@
             z-index: 10;
         }
 
-        #status { font-weight: bold; color: var(--primary); margin-top: 10px; }
+        #status { font-weight: bold; margin-top: 10px; }
         .hidden { display: none; }
     </style>
 </head>
@@ -229,7 +229,7 @@
 
                 if (isFirstRow) {
                     globalHeaders = rowValues;
-                    // Trova l'indice delle colonne chiave (ExcelJS usa 1-based, l'array è 0-based)
+                    // Trova l'indice delle colonne chiave
                     siteColumnIdx = globalHeaders.findIndex(h => String(h).toLowerCase() === 'siti');
                     networkColumnIdx = globalHeaders.findIndex(h => String(h).toLowerCase() === 'network');
                     isFirstRow = false;
@@ -312,7 +312,6 @@
         const limit = Math.min(dataToRender.length, 100);
         for (let i = 0; i < limit; i++) {
             const tr = document.createElement('tr');
-            // Assicuriamoci che la riga abbia lo stesso numero di celle degli header
             for (let j = 0; j < globalHeaders.length; j++) {
                 const td = document.createElement('td');
                 td.innerText = dataToRender[i][j] || '';
@@ -367,6 +366,7 @@
         }
 
         statusDiv.innerText = "Generazione dei file in corso... attendere.";
+        statusDiv.style.color = "var(--primary)";
         document.getElementById('exportBtn').disabled = true;
 
         try {
@@ -414,23 +414,36 @@
             const zip = new JSZip();
             const sitiFolder = zip.folder("Siti");
 
-            // Funzione helper per creare l'excel
+            // Funzione helper per creare l'excel (CORRETTA)
             async function createExcelBuffer(dataRows) {
                 const wb = new ExcelJS.Workbook();
-                await wb.xlsx.load(templateBuffer);
+                
+                // FIX 1: Cloniamo il buffer in memoria con slice(0)
+                await wb.xlsx.load(templateBuffer.slice(0));
                 const ws = wb.worksheets[0];
                 
-                // Determina riga di partenza (se c'è intestazione partiamo dalla 2)
+                // Determina la riga di partenza
                 const startRow = ws.actualRowCount > 0 ? 2 : 1;
                 
-                // Rimuovi vecchi dati mantenendo la formattazione
+                // FIX 2: Svuotiamo solo i valori, mantenendo formattazione e stili
                 if (ws.rowCount >= startRow) {
-                    ws.spliceRows(startRow, ws.rowCount - startRow + 1);
+                    for (let r = startRow; r <= ws.rowCount; r++) {
+                        const row = ws.getRow(r);
+                        row.eachCell({ includeEmpty: true }, (cell) => {
+                            cell.value = null;
+                        });
+                    }
                 }
 
-                // Inserisci i nuovi dati
-                dataRows.forEach(row => {
-                    ws.addRow(row);
+                // FIX 3: Inseriamo i nuovi dati cella per cella
+                dataRows.forEach((rowData, index) => {
+                    const rowIndex = startRow + index;
+                    const row = ws.getRow(rowIndex);
+                    
+                    rowData.forEach((val, colIndex) => {
+                        // In JS gli array partono da 0, ma le celle di Excel da 1
+                        row.getCell(colIndex + 1).value = val;
+                    });
                 });
 
                 return await wb.xlsx.writeBuffer();

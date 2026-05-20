@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Filter - Filtro per Siti</title>
+    
+    <!-- Librerie esterne caricate via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+            --border: #e5e7eb;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: #1f2937;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        h1, h2 { margin-top: 0; }
+        
+        .file-inputs {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .input-group {
+            flex: 1;
+            min-width: 300px;
+            border: 2px dashed var(--border);
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        button:hover { background-color: var(--primary-hover); }
+        button:disabled { background-color: #9ca3af; cursor: not-allowed; }
+
+        .sites-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        th {
+            background-color: #f8fafc;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        #status { font-weight: bold; color: var(--primary); margin-top: 10px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📊 Excel Filter - Filtro per Siti</h1>
+
+    <!-- SEZIONE CARICAMENTO -->
+    <div class="card">
+        <h2>📁 Caricamento File</h2>
+        <div class="file-inputs">
+            <div class="input-group">
+                <label><strong>1. Carica Report (Dati)</strong></label><br><br>
+                <input type="file" id="reportFile" accept=".xlsx, .xls">
+            </div>
+            <div class="input-group">
+                <label><strong>2. Carica Template (Formato)</strong></label><br><br>
+                <input type="file" id="templateFile" accept=".xlsx">
+            </div>
+        </div>
+        <div id="loadStatus" style="margin-top: 10px; color: green;"></div>
+    </div>
+
+    <!-- SEZIONE FILTRI (Nascosta all'avvio) -->
+    <div class="card hidden" id="filterSection">
+        <h2>🔍 Filtri</h2>
+        <button id="selectAllBtn">Seleziona Tutti</button>
+        <button id="deselectAllBtn">Deseleziona Tutti</button>
+        
+        <div class="sites-container" id="sitesContainer">
+            <!-- Le checkbox dei siti verranno iniettate qui -->
+        </div>
+
+        <button id="previewBtn">Aggiorna Anteprima</button>
+    </div>
+
+    <!-- SEZIONE ANTEPRIMA -->
+    <div class="card hidden" id="previewSection">
+        <h2>📋 Anteprima Dati (Prime 100 righe)</h2>
+        <p id="previewInfo"></p>
+        <div class="table-container">
+            <table id="dataTable">
+                <thead><tr id="tableHead"></tr></thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- SEZIONE ESPORTAZIONE -->
+    <div class="card hidden" id="exportSection">
+        <h2>📤 Esportazione</h2>
+        <button id="exportBtn">Genera Archivio ZIP</button>
+        <div id="status"></div>
+    </div>
+</div>
+
+<script>
+    // Variabili di stato globali
+    let globalData = [];      // Array di array (righe)
+    let globalHeaders = [];   // Nomi delle colonne
+    let siteColumnIdx = -1;
+    let networkColumnIdx = -1;
+    let uniqueSites = [];
+    let templateBuffer = null;
+
+    // Elementi DOM
+    const reportFileInput = document.getElementById('reportFile');
+    const templateFileInput = document.getElementById('templateFile');
+    const sitesContainer = document.getElementById('sitesContainer');
+    const tableHead = document.getElementById('tableHead');
+    const tableBody = document.getElementById('tableBody');
+    const loadStatus = document.getElementById('loadStatus');
+    const statusDiv = document.getElementById('status');
+
+    // Gruppi predefiniti (come da codice originale)
+    const siteGroups = {
+        "Bocconi_Iulm": ["bocconi", "iulm"],
+        "Monza_Duomo": ["monza solferino", "monza lecco", "duomo"],
+        "Azzurro_Terracina_Kennedy_Maradona": ["azzurro", "terracina", "kennedy", "maradona"],
+        "Firenze_UMIF_SanDonato": ["firenze", "umif", "firenze umif", "sandonato", "san donato", "firenze_umif"]
+    };
+
+    // 1. GESTIONE CARICAMENTO TEMPLATE
+    templateFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => { templateBuffer = e.target.result; };
+        reader.readAsArrayBuffer(file);
+    });
+
+    // 2. GESTIONE CARICAMENTO REPORT
+    reportFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        loadStatus.innerText = "Caricamento file in corso... attendere.";
+        
+        try {
+            const buffer = await file.arrayBuffer();
+            const workbook = new ExcelJS.Workbook();
+            await workbook.xlsx.load(buffer);
+            const worksheet = workbook.worksheets[0];
+
+            globalData = [];
+            globalHeaders = [];
+            let isFirstRow = true;
+
+            worksheet.eachRow((row, rowNumber) => {
+                // Estrai i valori puliti delle celle
+                const rowValues = [];
+                row.eachCell({ includeEmpty: true }, (cell) => {
+                    rowValues.push(cell.value);
+                });
+
+                if (isFirstRow) {
+                    globalHeaders = rowValues;
+                    // Trova l'indice delle colonne chiave (ExcelJS usa 1-based, l'array è 0-based)
+                    siteColumnIdx = globalHeaders.findIndex(h => String(h).toLowerCase() === 'siti');
+                    networkColumnIdx = globalHeaders.findIndex(h => String(h).toLowerCase() === 'network');
+                    isFirstRow = false;
+                } else {
+                    globalData.push(rowValues);
+                }
+            });
+
+            if (siteColumnIdx === -1) {
+                alert("Errore: Colonna 'Siti' non trovata nel file!");
+                loadStatus.innerText = "";
+                return;
+            }
+
+            extractSites();
+            renderSitesCheckboxes();
+            renderTable(globalData);
+
+            // Mostra le sezioni nascoste
+            document.getElementById('filterSection').classList.remove('hidden');
+            document.getElementById('previewSection').classList.remove('hidden');
+            document.getElementById('exportSection').classList.remove('hidden');
+            
+            loadStatus.innerText = "File caricato correttamente!";
+        } catch (error) {
+            console.error(error);
+            alert("Errore durante la lettura del file Excel.");
+        }
+    });
+
+    // 3. ESTRAZIONE SITI UNICI
+    function extractSites() {
+        const sitesMap = new Map();
+        globalData.forEach(row => {
+            const siteName = row[siteColumnIdx];
+            if (siteName) {
+                const cleanName = String(siteName).trim();
+                const lowerName = cleanName.toLowerCase();
+                if (!sitesMap.has(lowerName)) {
+                    sitesMap.set(lowerName, cleanName);
+                }
+            }
+        });
+        uniqueSites = Array.from(sitesMap.values()).sort((a, b) => a.localeCompare(b));
+    }
+
+    // 4. RENDER UI CHECKBOX E TABELLA
+    function renderSitesCheckboxes() {
+        sitesContainer.innerHTML = "";
+        uniqueSites.forEach(site => {
+            const label = document.createElement('label');
+            label.style.display = 'flex';
+            label.style.alignItems = 'center';
+            label.style.gap = '5px';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = site;
+            checkbox.checked = true; // Default selezionati
+            checkbox.className = 'site-checkbox';
+
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(site));
+            sitesContainer.appendChild(label);
+        });
+    }
+
+    function renderTable(dataToRender) {
+        tableHead.innerHTML = "";
+        tableBody.innerHTML = "";
+
+        // Header
+        globalHeaders.forEach(headerText => {
+            const th = document.createElement('th');
+            th.innerText = headerText || '';
+            tableHead.appendChild(th);
+        });
+
+        // Body (massimo 100 righe per le performance dell'anteprima)
+        const limit = Math.min(dataToRender.length, 100);
+        for (let i = 0; i < limit; i++) {
+            const tr = document.createElement('tr');
+            // Assicuriamoci che la riga abbia lo stesso numero di celle degli header
+            for (let j = 0; j < globalHeaders.length; j++) {
+                const td = document.createElement('td');
+                td.innerText = dataToRender[i][j] || '';
+                tr.appendChild(td);
+            }
+            tableBody.appendChild(tr);
+        }
+        
+        document.getElementById('previewInfo').innerText = 
+            `Mostrando ${limit} di ${dataToRender.length} righe totali filtrate.`;
+    }
+
+    // 5. EVENT LISTENERS BOTTONI FILTRO
+    document.getElementById('selectAllBtn').addEventListener('click', () => {
+        document.querySelectorAll('.site-checkbox').forEach(cb => cb.checked = true);
+    });
+
+    document.getElementById('deselectAllBtn').addEventListener('click', () => {
+        document.querySelectorAll('.site-checkbox').forEach(cb => cb.checked = false);
+    });
+
+    document.getElementById('previewBtn').addEventListener('click', () => {
+        const selected = getSelectedSitesLowerCase();
+        const filtered = globalData.filter(row => {
+            const site = String(row[siteColumnIdx] || '').trim().toLowerCase();
+            return selected.includes(site);
+        });
+        renderTable(filtered);
+    });
+
+    function getSelectedSitesLowerCase() {
+        const checkboxes = document.querySelectorAll('.site-checkbox:checked');
+        return Array.from(checkboxes).map(cb => cb.value.toLowerCase());
+    }
+    
+    function getSelectedSitesOriginal() {
+        const checkboxes = document.querySelectorAll('.site-checkbox:checked');
+        return Array.from(checkboxes).map(cb => cb.value);
+    }
+
+    // 6. LOGICA DI ESPORTAZIONE (CORE)
+    document.getElementById('exportBtn').addEventListener('click', async () => {
+        if (!templateBuffer) {
+            alert("Attenzione: Devi prima caricare il file Template.xlsx!");
+            return;
+        }
+
+        const selectedSitesOriginal = getSelectedSitesOriginal();
+        if (selectedSitesOriginal.length === 0) {
+            alert("Seleziona almeno un sito da esportare.");
+            return;
+        }
+
+        statusDiv.innerText = "Generazione dei file in corso... attendere.";
+        document.getElementById('exportBtn').disabled = true;
+
+        try {
+            const groupsToCreate = {};
+            const individualSites = [];
+
+            // Classifica i siti (Gruppi vs Individuali)
+            selectedSitesOriginal.forEach(site => {
+                const siteLower = site.toLowerCase().trim();
+                let assigned = false;
+                
+                for (const [groupName, groupSites] of Object.entries(siteGroups)) {
+                    if (groupSites.includes(siteLower)) {
+                        if (!groupsToCreate[groupName]) groupsToCreate[groupName] = [];
+                        groupsToCreate[groupName].push(siteLower);
+                        assigned = true;
+                        break;
+                    }
+                }
+                
+                if (!assigned) {
+                    individualSites.push(site);
+                }
+            });
+
+            // Gestione Area Nord
+            if (networkColumnIdx !== -1) {
+                const areaNordSites = new Set();
+                globalData.forEach(row => {
+                    const network = String(row[networkColumnIdx] || '').trim().toLowerCase();
+                    const site = String(row[siteColumnIdx] || '').trim().toLowerCase();
+                    if (network === 'area nord') {
+                        areaNordSites.add(site);
+                    }
+                });
+
+                const selectedSitesLower = selectedSitesOriginal.map(s => s.toLowerCase().trim());
+                const areaNordInSelection = selectedSitesLower.filter(s => areaNordSites.has(s));
+                
+                if (areaNordInSelection.length > 0) {
+                    groupsToCreate["Area_Nord"] = areaNordInSelection;
+                }
+            }
+
+            const zip = new JSZip();
+            const sitiFolder = zip.folder("Siti");
+
+            // Funzione helper per creare l'excel
+            async function createExcelBuffer(dataRows) {
+                const wb = new ExcelJS.Workbook();
+                await wb.xlsx.load(templateBuffer);
+                const ws = wb.worksheets[0];
+                
+                // Determina riga di partenza (se c'è intestazione partiamo dalla 2)
+                const startRow = ws.actualRowCount > 0 ? 2 : 1;
+                
+                // Rimuovi vecchi dati mantenendo la formattazione
+                if (ws.rowCount >= startRow) {
+                    ws.spliceRows(startRow, ws.rowCount - startRow + 1);
+                }
+
+                // Inserisci i nuovi dati
+                dataRows.forEach(row => {
+                    ws.addRow(row);
+                });
+
+                return await wb.xlsx.writeBuffer();
+            }
+
+            // Genera Gruppi
+            for (const [groupName, sitesList] of Object.entries(groupsToCreate)) {
+                const groupData = globalData.filter(row => {
+                    const site = String(row[siteColumnIdx] || '').trim().toLowerCase();
+                    return sitesList.includes(site);
+                });
+                
+                if (groupData.length > 0) {
+                    const fileBuffer = await createExcelBuffer(groupData);
+                    sitiFolder.file(`${groupName}.xlsx`, fileBuffer);
+                }
+            }
+
+            // Genera Individuali
+            for (const site of individualSites) {
+                const siteLower = site.toLowerCase().trim();
+                const siteData = globalData.filter(row => {
+                    return String(row[siteColumnIdx] || '').trim().toLowerCase() === siteLower;
+                });
+                
+                if (siteData.length > 0) {
+                    // Pulisci il nome del file per il sistema operativo
+                    const safeName = site.replace(/[^a-zA-Z0-9 \-_]/g, '').trim().replace(/ /g, '_');
+                    const fileBuffer = await createExcelBuffer(siteData);
+                    sitiFolder.file(`${safeName}.xlsx`, fileBuffer);
+                }
+            }
+
+            // Scarica lo ZIP
+            const zipContent = await zip.generateAsync({ type: "blob" });
+            saveAs(zipContent, "Esportazione_Siti.zip");
+
+            statusDiv.innerText = "Esportazione completata con successo! Download avviato.";
+            statusDiv.style.color = "green";
+        } catch (error) {
+            console.error(error);
+            statusDiv.innerText = "Errore durante l'esportazione. Controlla la console per i dettagli.";
+            statusDiv.style.color = "red";
+        } finally {
+            document.getElementById('exportBtn').disabled = false;
+        }
+    });
+</script>
+
+</body>
+</html>
